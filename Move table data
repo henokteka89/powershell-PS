@@ -1,0 +1,36 @@
+# Step 1 on Source Server: Populate a table (trucate at source, then populate)
+
+Set-DbatoolsConfig -FullName sql.connection.trustcert -Value $true 
+# 1.1. Truncate
+Invoke-DbQuery -SqlInstance sourceservername -Database 'admin' -Query "TRUNCATE TABLE reporting.CEP_Fields"
+
+# 1.2. Populate 
+Invoke-DbQuery -SqlInstance sourceservername -Database 'admin' -Query @"
+DECLARE @start DATETIME = CAST(DATEADD(MONTH, DATEDIFF(MONTH, 0, GETDATE()) - 1, 0) AS DATE),
+        @end   DATETIME = CAST(DATEADD(MONTH, DATEDIFF(MONTH, 0, GETDATE()), 0) AS DATE),
+        @countrytype VARCHAR(9) = 'National Account';
+
+INSERT INTO reporting.CEP_Fields (ID, PrintedComments, Status, Iscomplete)
+SELECT DISTINCT
+       s.ID,
+         PrintedComments,
+       Status,
+       Iscomplete
+FROM tblfileds s
+LEFT JOIN ...
+"@
+
+# Step 2 : EXPORT data to Destination
+$Params = @{
+    Sqlinstance = Source 
+    Destination = Destination
+    Database = admin 
+    Table = reporting.CEP_Fields 
+    DestinationDatabase = admin 
+    DestinationTable = reporting.CEP_Fields 
+   #Batchsoze = 10000
+Autocreatetable = $false  # true to create if missing
+Truncate = $true #clears target table before insert 
+ 
+} 
+Copy-DbaDbTableData @Params
