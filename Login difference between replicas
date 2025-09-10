@@ -3,7 +3,7 @@ $primaryServer   = "ATLDB01P"
 $secondaryServer = "ATLDB02P"
 $database        = "DBA"
 $table           = "LoginsInfo"
-set-dbaatoolsconfig  -fullname 'sql.connection.trustcert'  =value $true
+set-dbatoolsconfig  -fullname 'sql.connection.trustcert'  -value $true
 # Function: Populate LoginsInfo table on both servers
 function Refresh-LoginsInfo {
     param ($server)
@@ -38,8 +38,8 @@ $missingInSecondary = $primaryLogins  | Where-Object { $_.name -notin $secondary
 $missingInPrimary   = $secondaryLogins | Where-Object { $_.name -notin $primaryLogins.name }
 
 # Step D: Output results
-Write-Host "`nLogins present in $primaryServer but missing in $secondaryServer:" -ForegroundColor Cyan
+Write-Host "`nLogins present in ${primaryServer} but missing in ${secondaryServer}:" -ForegroundColor Cyan
 $missingInSecondary | Format-Table SERVERNAME, name, type_desc, create_date, modify_date
 
-Write-Host "`nLogins present in $secondaryServer but missing in $primaryServer:" -ForegroundColor Yellow
+Write-Host "`nLogins present in ${secondaryServer} but missing in ${primaryServer}:" -ForegroundColor Yellow
 $missingInPrimary | Format-Table SERVERNAME, name, type_desc, create_date, modify_date
