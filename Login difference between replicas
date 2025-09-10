@@ -19,7 +19,10 @@ function Refresh-LoginsInfo {
             create_date,
             modify_date
         FROM sys.server_principals
-        WHERE type IN ('S', 'U', 'G'/*, 'C', 'K'*/) AND name NOT LIKE '##%'
+        WHERE type IN ('S', 'U', 'G'/*, 'C', 'K'*/) 
+        AND name NOT LIKE '##%'
+        AND name NOT LIKE 'NT %'
+        AND name NOT LIKE 'BUILTIN%'
        -- AND type_desc NOT IN ('SERVER_ROLE', 'CERTIFICATE_MAPPED_LOGIN')
 -- sql login, window login, windowgroup, certificate, asymmetric key
     "
