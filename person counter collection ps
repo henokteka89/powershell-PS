@@ -1,0 +1,39 @@
+# ==============================
+# Remote PerfMon Collector Script
+# ==============================
+
+# Target servers (replicas)
+$servers = @("01pd", "02pd")
+
+# Perfmon counters to collect
+$counters = @(
+    "\SQLServer:Availability Replica(*)\Flow Control Time (ms)",
+    "\SQLServer:Availability Replica(*)\Flow Control/sec",
+    "\SQLServer:Database Replica(*)\Log Bytes Sent/sec",
+    "\SQLServer:Database Replica(*)\Log Bytes Received/sec",
+    "\SQLServer:Databases(*)\Log Flushes/sec",
+    "\SQLServer:Databases(*)\Log Flush Wait Time",
+    "\SQLServer:Databases(*)\Log Flush Write Time (ms)"
+)
+
+# Duration and interval
+$duration = 30       # Total seconds to capture
+$interval = 1        # Sample every 1 second
+
+# Output directory on ncuadmin
+$savePath = "C:\PerfmonResults"
+
+# Create folder if it doesn’t exist
+if (!(Test-Path $savePath)) { New-Item -ItemType Directory -Path $savePath }
+
+foreach ($server in $servers) {
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $outfile = "$savePath\PerfData_${server}_$timestamp.csv"
+
+    Write-Host "Collecting PerfMon counters from $server for $duration seconds..."
+
+    Get-Counter -ComputerName $server -Counter $counters -SampleInterval $interval -MaxSamples $duration |
+        Export-Counter -Path $outfile -FileFormat CSV
+
+    Write-Host "✅ Saved PerfMon data to $outfile"
+}
