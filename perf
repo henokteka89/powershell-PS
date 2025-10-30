@@ -1,152 +1,180 @@
-# target servers
-$servers = @("abc")  # Server name(s), e.g. "PD1", "PD2"
+#target servers
+$servers = @("HLMM") #servername or names
 
-# target database
-$databasename = 'abc'  # e.g., 'ESC'
-
-# duration and interval
+#Target database 
+$databasename = 'admin'
+#duration and interval
 $durationseconds = 30
 $intervalseconds = 1
-$maxsamples = [int][math]::Ceiling($durationseconds / $intervalseconds)
+$maxsamples = [int][math]::ceiling($durationseconds / $intervalseconds)
 
-# output directory on this computer
+#output directory on this compuiter
+
 $savepath = "C:\PerfmonResults"
-if (!(Test-Path $savepath)) { 
-    New-Item -ItemType Directory -Path $savepath -Force | Out-Null 
-}
+if(!(test-path $savepath)) { New-Item -ItemType directory -Path $savepath -Force | out-null }
 
-# ============================================
-# Function: Get-SqlCounterObjects
-# ============================================
-function Get-SqlCounterObjects {
+function  Get-SqlCounterObjects {
     param([string]$computerName)
-
+    
     try {
-        $sets = Get-Counter -ComputerName $computerName -ListSet '*availability*', '*replica*', '*database*', '*databases*' -ErrorAction Stop
-        return $sets
-    } 
-    catch { 
-        Write-Warning "[$computerName] Unable to query counter sets. Check Remote Registry, firewall, and permissions. $_"
-        return @()
+    $sets = Get-Counter -ComputerName $computerName -ListSet '*availability*', '*replica*', '*database*', '*databases*' -ErrorAction Stop
+    return $sets
+    } catch { Write-Warning "[$computername] unable to query counters sets. check remote registry, firewall, and permissions. $_"
+    return @()
     }
+    }
+
+function select-objectname {
+param([string[]]$availablitynames, [string]$family #e.g. 'availability replica', 'database replica', 'databases'..
+)
+#prefer name-instance (MSSQL$X:) object names first; otherwise sql server
+$availablitynames | 
+Where-Object { $_ -like "*:$family" } | 
+Sort-Object { if ($_ -like 'mssql$*' ) { 0 } else { 1 } } |
+Select-object -First 1
 }
 
-# ============================================
-# Function: Select-ObjectName
-# Choose the most relevant performance counter set
-# ============================================
-function Select-ObjectName {
-    param(
-        [string[]]$availabilityNames,
-        [string]$family  # e.g. 'Availability Replica', 'Database Replica', 'Databases'
-    )
 
-    # Prefer MSSQL$Instance type counter names if present
-    $preferred = $availabilityNames | Where-Object { $_ -match 'MSSQL\$' -and $_ -match $family }
-    if ($preferred) { 
-        return $preferred[0] 
-    }
+function try-getinstances {
+Param(
+[object]$counterset, # object from get-counter -listset
+[string]$likefiltertext # e.g., 'databasename' to try to narrow instances
+)
+if (-not $counterset) { return @() }
 
-    # Otherwise fall back to generic SQL Server counter
-    $fallback = $availabilityNames | Where-Object { $_ -match $family }
-    if ($fallback) { 
-        return $fallback[0] 
-    }
-
-    return $null
+$inst = @()
+try {
+$inst = $counterset.instances
+} catch { 
+$inst = @()
 }
 
-# ============================================
-# Function: Try-GetInstances
-# Attempt to retrieve instances for a given counter family
-# ============================================
-function Try-GetInstances {
-    param(
-        [string]$computerName,
-        [string]$family  # e.g. 'Availability Replica', 'Database Replica', etc.
-    )
+if (-not $inst) { return @() }
 
-    try {
-        $set = Get-Counter -ComputerName $computerName -ListSet $family -ErrorAction Stop
-        return $set.Counter
-    } 
-    catch {
-        Write-Verbose "[$computerName] No instances found for $family. $_"
-        return @()
-    }
+  
+  # try to pick instances that contain the db name (case-insensittive)
+  $Match = $inst | Where-Object { $_ -match [regex]::escape($likefiltertext) }
+  if ($Match -and $Match.Count -gt 0) { return $Match }
+  
+  # no direct match; return empty so caller can decide to fallback to (*) 
+  return @()
+  }
+  
+  function resolve-countersforserver {
+  param(
+  [string]$computername, [string]$DBname
+  )
+  $sets = Get-SqlCounterObjects -computerName $computername
+  if (-not $sets -or $sets.count -eq 0) {
+      return @()
+  }
+
+  $availablenames = $sets | Select-Object -ExcludeProperty countersetname
+# Resolve object names (default vs named instance)
+$objAvailabilityReplica = Select-ObjectName -AvailableNames $availableNames -Family 'Availability Replica'
+$objDatabaseReplica     = Select-ObjectName -AvailableNames $availableNames -Family 'Database Replica'
+$objDatabases           = Select-ObjectName -AvailableNames $availableNames -Family 'Databases'
+
+if (-not $objDatabases) {
+    Write-Warning "[$computerName] Could not resolve 'Databases' counter object."
+}
+if (-not $objDatabaseReplica) {
+    Write-Warning "[$computerName] Could not resolve 'Database Replica' counter object."
+}
+if (-not $objAvailabilityReplica) {
+    Write-Warning "[$computerName] Could not resolve 'Availability Replica' counter object."
 }
 
-# ============================================
-# Function: Collect-AGPerfData
-# Main data collector for AG-related counters
-# ============================================
-function Collect-AGPerfData {
-    param(
-        [string]$computerName,
-        [string]$databaseName,
-        [int]$intervalSeconds,
-        [int]$maxSamples,
-        [string]$savepath
-    )
+$resolved = New-Object System.Collections.Generic.List[string]
 
-    # Define the AG-related counters we care about
-    $counters = @(
-        "\MSSQL$*\Availability Replica(*)\*",
-        "\MSSQL$*\Database Replica(*)\*",
-        "\MSSQL$*\Databases(*)\*"
-    )
-
-    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    $outfile = Join-Path $savepath "$computerName`_$databaseName`_PerfData_$timestamp.csv"
-
-    try {
-        Write-Host "`n[$computerName] Collecting performance counters..."
-        $data = Get-Counter -ComputerName $computerName -Counter $counters `
-                 -SampleInterval $intervalSeconds -MaxSamples $maxSamples -ErrorAction Stop
-
-        $filtered = $data.CounterSamples | Where-Object { $_.Path -match $databaseName } |
-            Select-Object `
-                @{Name='Timestamp';Expression={$_.Timestamp}},
-                @{Name='Path';Expression={$_.Path}},
-                @{Name='CookedValue';Expression={$_.CookedValue}}
-
-        if ($filtered) {
-            $filtered | Export-Csv -Path $outfile -NoTypeInformation
-            Write-Host "[$computerName] Results saved to $outfile"
-        }
-        else {
-            Write-Warning "[$computerName] No counters matched database '$databaseName'."
+# 1) DB-scoped counters for 'core'
+if ($objDatabaseReplica) {
+    foreach ($cn in @('Log Bytes Sent/sec','Log Bytes Received/sec')) {
+        $path = "\$objDatabaseReplica($DBname)\$cn"
+        try {
+            $null = Get-Counter -ComputerName $computerName -Counter $path -MaxSamples 1 -ErrorAction Stop
+            $resolved.Add($path) | Out-Null
+        } catch {
+            Write-Warning "[$computerName] Counter not found: $path"
         }
     }
-    catch {
-        Write-Warning "[$computerName] Failed to collect data. $_"
+}
+
+if ($objDatabases) {
+    $path = "\$objDatabases($DBname)\Log Bytes Flushed/sec"
+    try {
+        $null = Get-Counter -ComputerName $computerName -Counter $path -MaxSamples 1 -ErrorAction Stop
+        $resolved.Add($path) | Out-Null
+    } catch {
+        Write-Warning "[$computerName] Counter not found: $path"
     }
 }
 
-# ============================================
-# MAIN EXECUTION
-# ============================================
+# 2) Replica-level counters (attempt to filter instances to those containing 'core')
+if ($objAvailabilityReplica) {
+    $setAvail = $sets | Where-Object { $_.CounterSetName -eq $objAvailabilityReplica }
+
+    # Try to get instances that include the DB name; if none, fallback to (*)
+    $instCandidates = Try-GetInstances -CounterSet $setAvail -LikeFilterText $DBname
+    $instList = @()
+    if ($instCandidates -and $instCandidates.Count -gt 0) {
+        $instList = $instCandidates
+    } else {
+        # Fallback: keep (*) so you still capture
+        $instList = @('*')
+    }
+
+    $replicaCounters = @(
+        'Bytes Received from Replica/sec'
+        'Bytes Sent to Replica/sec'
+        'Flow Control/sec'
+    )
+
+    foreach ($inst in $instList) {
+        # If instance is (*) leave as wildcard; otherwise use the instance name
+        $instText = if ($inst -eq '*') { '*' } else { "($inst)" }
+        foreach ($cn in $replicaCounters) {
+            $path = "\$objAvailabilityReplica$instText\$cn"
+            try {
+                $null = Get-Counter -ComputerName $computerName -Counter $path -MaxSamples 1 -ErrorAction Stop
+                $resolved.Add($path) | Out-Null
+            } catch {
+                Write-Warning "[$computerName] Counter not found: $path"
+            }
+        }
+    }
+}
+
+# Deduplicate and return
+$resolved | Select-Object -Unique
+}
 
 foreach ($server in $servers) {
-    Write-Host "==========================================="
-    Write-Host "Collecting PerfMon data from: $server"
-    Write-Host "Database: $databasename"
-    Write-Host "Duration: $durationseconds sec (Interval: $intervalseconds sec)"
-    Write-Host "==========================================="
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $safeServer = ($server -replace '[\\\/:\*\?\"\<\>\|]', '_')
+    $outFile = Join-Path $savePath "PerfData_${safeServer}_${databaseName}_$timestamp.blg"
 
-    # Confirm we can see counter sets
-    $sets = Get-SqlCounterObjects -computerName $server
-    if (-not $sets -or $sets.Count -eq 0) {
-        Write-Warning "[$server] No counter sets found. Skipping."
+    Write-Host "Resolving counters on $server for DB '$databaseName' ..."
+    $counters = Resolve-CountersForServer -ComputerName $server -DBName $databaseName
+
+    if (-not $counters -or $counters.Count -eq 0) {
+        Write-Warning "[$server] No valid counters resolved. Nothing to collect."
         continue
     }
 
-    # Attempt data collection
-    Collect-AGPerfData -computerName $server `
-                       -databaseName $databasename `
-                       -intervalSeconds $intervalseconds `
-                       -maxSamples $maxsamples `
-                       -savepath $savepath
+    Write-Host "Collecting counters for '$databaseName' from $server for $durationSeconds seconds (interval $intervalSeconds)"
+    try {
+        $samples = Get-Counter -ComputerName $server -Counter $counters `
+                    -SampleInterval $intervalSeconds -MaxSamples $maxSamples -ErrorAction Stop
+        $samples | Export-Counter -Path $outFile -FileFormat BLG -Force
+
+        Write-Host "Saved PerfMon BLG to $outFile"
+        Write-Host "Counters collected:"
+        $counters | ForEach-Object { Write-Host "  $_" }
+    } catch {
+        Write-Error "[$server] Collection failed: $_"
+    }
 }
 
-Write-Host "`n✅ Collection complete. Results saved under $savepath"
+
+             
