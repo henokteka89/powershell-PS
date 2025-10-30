@@ -1,50 +1,53 @@
 <#
 .SYNOPSIS
 Collects SQL Server Always On Availability Group performance counters
-from a remote or local SQL Server instance.
+from one or more remote SQL Server instances.
 
 .DESCRIPTION
-Runs Get-Counter remotely against a SQL Server node (Primary/Secondary)
-to collect key AlwaysOn AG and Database Replica metrics for a specific database
-and saves results locally as CSV. Useful for comparing primary vs secondary performance.
+Runs Get-Counter remotely against specified SQL Server nodes (Primary/Secondary)
+to collect key Always On Availability Group (AG) and Database Replica counters
+for a target database. Results are stored as CSV files locally
+on the machine executing this script for later comparison.
 
 .EXAMPLE
-.\Collect-AGPerfCounters.ps1 -ServerName PD1 -DatabaseName ESC
-.\Collect-AGPerfCounters.ps1 -ServerName PD2 -DatabaseName ESC
+.\Collect-AGPerfCounters.ps1 -ServerName PD1,PD2 -DatabaseName ESC
 #>
 
 param(
-    [string] $ServerName = $env:COMPUTERNAME,
-    [string] $DatabaseName = "ESC",
-    [int] $DurationSeconds = 30,
-    [int] $IntervalSeconds = 1,
-    [string] $OutputDirectory = "C:\PerfLogs\AGPerfData"
+    [string[]] $ServerName = @("PD1", "PD2"),       # Remote SQL nodes
+    [string] $DatabaseName = "ESC",                 # Target database
+    [int] $DurationSeconds = 30,                    # Total duration (seconds)
+    [int] $IntervalSeconds = 1,                     # Sample every n seconds
+    [string] $OutputDirectory = "C:\PerfLogs\AGPerfData"  # Save path (local)
 )
 
-# Compute total samples
+# --- Derived values ---
 [int] $MaxSamples = [math]::Ceiling($DurationSeconds / $IntervalSeconds)
 
-Write-Host "=== SQL AG Perf Counter Collector ==="
-Write-Host "Server        : $ServerName"
+Write-Host "============================================="
+Write-Host "   SQL AG Performance Counter Collector"
+Write-Host "============================================="
+Write-Host "Servers       : $($ServerName -join ', ')"
 Write-Host "Database      : $DatabaseName"
-Write-Host "Duration (sec): $DurationSeconds"
-Write-Host "Interval (sec): $IntervalSeconds"
+Write-Host "Duration (s)  : $DurationSeconds"
+Write-Host "Interval (s)  : $IntervalSeconds"
 Write-Host "Samples       : $MaxSamples"
-Write-Host "Output Dir    : $OutputDirectory"
-Write-Host "====================================="
+Write-Host "Output Folder : $OutputDirectory"
+Write-Host "============================================="
 
-# Ensure output path exists
+# --- Ensure output directory exists ---
 if (-not (Test-Path $OutputDirectory)) {
     Write-Host "Creating directory $OutputDirectory..."
     New-Item -Path $OutputDirectory -ItemType Directory -Force | Out-Null
 }
 
-# Define counter paths (customize as needed)
+# --- Define relevant AG-related perfmon counters ---
 $AGCounters = @(
     "\MSSQL$*\Availability Replica(*)\*",
     "\MSSQL$*\Database Replica(*)\*"
 )
 
+# --- Function to collect counter data from one server ---
 function Get-SqlCounterData {
     param(
         [string] $ComputerName,
@@ -54,18 +57,21 @@ function Get-SqlCounterData {
     )
 
     try {
-        Write-Host "Collecting counters from $ComputerName..."
-        $data = Get-Counter -ComputerName $ComputerName -Counter $Counters `
-                 -SampleInterval $IntervalSeconds -MaxSamples $MaxSamples -ErrorAction Stop
+        Write-Host "[$ComputerName] Collecting counters..."
+        $data = Get-Counter -ComputerName $ComputerName `
+                            -Counter $Counters `
+                            -SampleInterval $IntervalSeconds `
+                            -MaxSamples $MaxSamples `
+                            -ErrorAction Stop
         return $data
     }
     catch {
-        Write-Warning "Error collecting counters from $ComputerName: $_"
+        Write-Warning "[$ComputerName] Failed to collect counters: $_"
         return $null
     }
 }
 
-# Function to filter and export data
+# --- Function to save results to CSV ---
 function Save-PerfData {
     param(
         [Microsoft.PowerShell.Commands.GetCounter.PerformanceCounterSampleSet] $CounterData,
@@ -75,7 +81,7 @@ function Save-PerfData {
     )
 
     if (-not $CounterData) {
-        Write-Warning "No data to save for $ServerName"
+        Write-Warning "[$ServerName] No data to save."
         return
     }
 
@@ -90,14 +96,19 @@ function Save-PerfData {
             @{Name='CookedValue';Expression={$_.CookedValue}} |
         Export-Csv -Path $outfile -NoTypeInformation
 
-    Write-Host "Saved data to $outfile"
+    Write-Host "[$ServerName] Data saved to $outfile"
 }
 
-# === Main ===
-$counterData = Get-SqlCounterData -ComputerName $ServerName `
-    -Counters $AGCounters -IntervalSeconds $IntervalSeconds -MaxSamples $MaxSamples
+# --- MAIN EXECUTION LOOP ---
+foreach ($srv in $ServerName) {
+    Write-Host "`n=== Starting collection for $srv ==="
+    $counterData = Get-SqlCounterData -ComputerName $srv `
+        -Counters $AGCounters -IntervalSeconds $IntervalSeconds -MaxSamples $MaxSamples
 
-Save-PerfData -CounterData $counterData -ServerName $ServerName `
-    -DatabaseName $DatabaseName -OutputDirectory $OutputDirectory
+    Save-PerfData -CounterData $counterData -ServerName $srv `
+        -DatabaseName $DatabaseName -OutputDirectory $OutputDirectory
 
-Write-Host "Collection complete."
+    Write-Host "=== Completed $srv ===`n"
+}
+
+Write-Host "✅ Collection complete. CSVs saved under $OutputDirectory."
