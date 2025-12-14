@@ -1,0 +1,4 @@
+
+Clear-Host
+Invoke-Sqlcmd -ConnectionString "server=.; database=master;integrated security = true; trustservercertificate = true"`
+ -Query " Select r.session_id, command from sys.dm_exec_requests r where r.session_id > 55;" | Format-Table 
