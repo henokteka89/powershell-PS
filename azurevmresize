@@ -1,0 +1,15 @@
+$ResourceGroupName = "YourRG"
+$VMName            = "YourVMName"
+$TargetSize        = "Standard_D8s_v5"   # temporary or revert size
+
+Connect-AzAccount
+$vm = Get-AzVM -ResourceGroupName $ResourceGroupName -Name $VMName
+
+Stop-AzVM -ResourceGroupName $ResourceGroupName -Name $VMName -Force
+
+$vm.HardwareProfile.VmSize = $TargetSize
+Update-AzVM -ResourceGroupName $ResourceGroupName -VM $vm
+
+Start-AzVM -ResourceGroupName $ResourceGroupName -Name $VMName
+
+Write-Host "VM resized to $TargetSize"
