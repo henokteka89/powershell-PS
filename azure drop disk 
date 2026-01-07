@@ -3,7 +3,7 @@
 # ==========================================================
 $ResourceGroupName = "YourRG"
 $VMName            = "YourVMName"
-$DiskName          = "$VMName`_escreendbDisk"
+$DiskName          = "$VMName`_edbDisk"
 $SqlInstance       = "localhost"      # or SERVER\INSTANCE
 $DatabaseName      = "YourDatabaseName"
 
