@@ -1,5 +1,5 @@
 $ResourceGroupName = "YourRG"
-$DiskName          = "YourVMName_escreendbDisk"
+$DiskName          = "YourVMName_edbDisk"
 $NewSku            = "StandardSSD_LRS"
 
 Connect-AzAccount
