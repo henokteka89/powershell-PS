@@ -1,0 +1,71 @@
+# ==========================================================
+# VARIABLES
+# ==========================================================
+$ResourceGroupName = "YourRG"
+$VMName            = "YourVMName"
+$DiskName          = "$VMName`_escreendbDisk"
+$SqlInstance       = "localhost"      # or SERVER\INSTANCE
+$DatabaseName      = "YourDatabaseName"
+
+# ==========================================================
+# CONNECT & GET VM
+# ==========================================================
+Connect-AzAccount
+$vm = Get-AzVM -ResourceGroupName $ResourceGroupName -Name $VMName
+
+# ==========================================================
+# DROP DATABASE INSIDE VM (WINDOWS AUTH, NO CERT ISSUES)
+# ==========================================================
+$dropDbScript = @"
+Import-Module SqlServer -ErrorAction Stop
+
+\$query = @"
+IF DB_ID('$DatabaseName') IS NOT NULL
+BEGIN
+    ALTER DATABASE [$DatabaseName] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+    DROP DATABASE [$DatabaseName];
+END
+"@
+
+Invoke-Sqlcmd `
+    -ServerInstance '$SqlInstance' `
+    -Query \$query `
+    -TrustServerCertificate `
+    -Encrypt Optional
+
+Write-Output "DATABASE_DROPPED"
+"@
+
+$result = Invoke-AzVMRunCommand `
+    -ResourceGroupName $ResourceGroupName `
+    -VMName $VMName `
+    -CommandId "RunPowerShellScript" `
+    -ScriptString $dropDbScript
+
+if ($result.Value[0].Message -notmatch "DATABASE_DROPPED") {
+    throw "Database drop failed. Aborting disk removal."
+}
+
+Write-Host "Database dropped successfully."
+
+# ==========================================================
+# DETACH DISK FROM VM
+# ==========================================================
+Write-Host "Detaching disk from VM..."
+
+$vm = Remove-AzVMDataDisk -VM $vm -Name $DiskName
+Update-AzVM -ResourceGroupName $ResourceGroupName -VM $vm
+
+Write-Host "Disk detached successfully."
+
+# ==========================================================
+# DELETE MANAGED DISK
+# ==========================================================
+Write-Host "Deleting managed disk..."
+
+Remove-AzDisk `
+    -ResourceGroupName $ResourceGroupName `
+    -DiskName $DiskName `
+    -Force
+
+Write-Host "Disk deleted successfully."
