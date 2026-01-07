@@ -1,27 +1,31 @@
-# -------------------------------
-# Variables
-# -------------------------------
+# ==========================================================
+# VARIABLES
+# ==========================================================
 $ResourceGroupName = "YourRG"
 $VMName            = "YourVMName"
 $Location          = "eastus"
+
 $DiskSizeGB        = 5000
 $DiskSuffix        = "edbDisk"
+$DiskSku           = "StandardSSD_LRS"   # <-- Change to Premium_LRS if needed
+# Valid values: StandardSSD_LRS | Premium_LRS
+
 $DriveLetter       = "E"
 $VolumeLabel       = "edisk"
+$Lun               = 10
 
-# -------------------------------
-# Login & get VM
-# -------------------------------
+# ==========================================================
+# LOGIN & GET VM
+# ==========================================================
 Connect-AzAccount
-
 $vm = Get-AzVM -ResourceGroupName $ResourceGroupName -Name $VMName
 
-# -------------------------------
-# Check inside VM if E: drive >= 4TB exists
-# -------------------------------
+# ==========================================================
+# CHECK IF E: >= 4TB EXISTS INSIDE VM
+# ==========================================================
 $checkDriveScript = @"
-\$drive = Get-Volume -DriveLetter $DriveLetter -ErrorAction SilentlyContinue
-if (\$drive -and \$drive.Size -ge 4TB) {
+\$vol = Get-Volume -DriveLetter $DriveLetter -ErrorAction SilentlyContinue
+if (\$vol -and \$vol.Size -ge 4TB) {
     Write-Output "EXISTS"
 } else {
     Write-Output "MISSING"
@@ -35,21 +39,21 @@ $result = Invoke-AzVMRunCommand `
     -ScriptString $checkDriveScript
 
 if ($result.Value[0].Message -match "EXISTS") {
-    Write-Host "E: drive >= 4TB already exists. No action required."
+    Write-Host "E: drive >= 4TB already exists. Exiting."
     return
 }
 
-Write-Host "E: drive not found or smaller than 4TB. Proceeding..."
+Write-Host "E: drive not found or < 4TB. Proceeding..."
 
-# -------------------------------
-# Create managed disk
-# -------------------------------
+# ==========================================================
+# CREATE MANAGED DISK
+# ==========================================================
 $diskName = "$VMName`_$DiskSuffix"
 
 $diskConfig = New-AzDiskConfig `
     -Location $Location `
     -DiskSizeGB $DiskSizeGB `
-    -SkuName Premium_LRS `
+    -SkuName $DiskSku `
     -CreateOption Empty
 
 $disk = New-AzDisk `
@@ -57,14 +61,14 @@ $disk = New-AzDisk `
     -DiskName $diskName `
     -Disk $diskConfig
 
-# -------------------------------
-# Attach disk to VM (Caching None)
-# -------------------------------
+# ==========================================================
+# ATTACH DISK (CACHING NONE)
+# ==========================================================
 $vm = Add-AzVMDataDisk `
     -VM $vm `
     -Name $diskName `
     -ManagedDiskId $disk.Id `
-    -Lun 10 `
+    -Lun $Lun `
     -Caching None `
     -CreateOption Attach
 
@@ -72,14 +76,25 @@ Update-AzVM -ResourceGroupName $ResourceGroupName -VM $vm
 
 Write-Host "Disk attached. Initializing inside VM..."
 
-# -------------------------------
-# Initialize + format disk inside VM
-# -------------------------------
+# ==========================================================
+# INITIALIZE + FORMAT (MBR, NTFS, 64K)
+# ==========================================================
 $formatScript = @"
 \$disk = Get-Disk | Where-Object PartitionStyle -Eq 'RAW' | Sort-Object Number | Select-Object -First 1
-Initialize-Disk -Number \$disk.Number -PartitionStyle GPT
-\$partition = New-Partition -DiskNumber \$disk.Number -UseMaximumSize -DriveLetter $DriveLetter
-Format-Volume -Partition \$partition -FileSystem NTFS -NewFileSystemLabel '$VolumeLabel' -Confirm:\$false
+
+Initialize-Disk -Number \$disk.Number -PartitionStyle MBR
+
+\$partition = New-Partition `
+    -DiskNumber \$disk.Number `
+    -UseMaximumSize `
+    -DriveLetter $DriveLetter
+
+Format-Volume `
+    -Partition \$partition `
+    -FileSystem NTFS `
+    -AllocationUnitSize 65536 `
+    -NewFileSystemLabel '$VolumeLabel' `
+    -Confirm:\$false
 "@
 
 Invoke-AzVMRunCommand `
@@ -88,4 +103,4 @@ Invoke-AzVMRunCommand `
     -CommandId "RunPowerShellScript" `
     -ScriptString $formatScript
 
-Write-Host "Disk formatted as E: with label '$VolumeLabel'"
+Write-Host "Disk formatted: NTFS, 64K, MBR, Drive E:"
