@@ -1,0 +1,91 @@
+# -------------------------------
+# Variables
+# -------------------------------
+$ResourceGroupName = "YourRG"
+$VMName            = "YourVMName"
+$Location          = "eastus"
+$DiskSizeGB        = 5000
+$DiskSuffix        = "edbDisk"
+$DriveLetter       = "E"
+$VolumeLabel       = "edisk"
+
+# -------------------------------
+# Login & get VM
+# -------------------------------
+Connect-AzAccount
+
+$vm = Get-AzVM -ResourceGroupName $ResourceGroupName -Name $VMName
+
+# -------------------------------
+# Check inside VM if E: drive >= 4TB exists
+# -------------------------------
+$checkDriveScript = @"
+\$drive = Get-Volume -DriveLetter $DriveLetter -ErrorAction SilentlyContinue
+if (\$drive -and \$drive.Size -ge 4TB) {
+    Write-Output "EXISTS"
+} else {
+    Write-Output "MISSING"
+}
+"@
+
+$result = Invoke-AzVMRunCommand `
+    -ResourceGroupName $ResourceGroupName `
+    -VMName $VMName `
+    -CommandId "RunPowerShellScript" `
+    -ScriptString $checkDriveScript
+
+if ($result.Value[0].Message -match "EXISTS") {
+    Write-Host "E: drive >= 4TB already exists. No action required."
+    return
+}
+
+Write-Host "E: drive not found or smaller than 4TB. Proceeding..."
+
+# -------------------------------
+# Create managed disk
+# -------------------------------
+$diskName = "$VMName`_$DiskSuffix"
+
+$diskConfig = New-AzDiskConfig `
+    -Location $Location `
+    -DiskSizeGB $DiskSizeGB `
+    -SkuName Premium_LRS `
+    -CreateOption Empty
+
+$disk = New-AzDisk `
+    -ResourceGroupName $ResourceGroupName `
+    -DiskName $diskName `
+    -Disk $diskConfig
+
+# -------------------------------
+# Attach disk to VM (Caching None)
+# -------------------------------
+$vm = Add-AzVMDataDisk `
+    -VM $vm `
+    -Name $diskName `
+    -ManagedDiskId $disk.Id `
+    -Lun 10 `
+    -Caching None `
+    -CreateOption Attach
+
+Update-AzVM -ResourceGroupName $ResourceGroupName -VM $vm
+
+Write-Host "Disk attached. Initializing inside VM..."
+
+# -------------------------------
+# Initialize + format disk inside VM
+# -------------------------------
+$formatScript = @"
+\$disk = Get-Disk | Where-Object PartitionStyle -Eq 'RAW' | Sort-Object Number | Select-Object -First 1
+Initialize-Disk -Number \$disk.Number -PartitionStyle GPT
+\$partition = New-Partition -DiskNumber \$disk.Number -UseMaximumSize -DriveLetter $DriveLetter
+Format-Volume -Partition \$partition -FileSystem NTFS -NewFileSystemLabel '$VolumeLabel' -Confirm:\$false
+"@
+
+Invoke-AzVMRunCommand `
+    -ResourceGroupName $ResourceGroupName `
+    -VMName $VMName `
+    -CommandId "RunPowerShellScript" `
+    -ScriptString $formatScript
+
+Write-Host "Disk formatted as E: with label '$VolumeLabel'"
