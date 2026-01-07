@@ -1,0 +1,15 @@
+$ResourceGroupName = "YourRG"
+$DiskName          = "YourVMName_escreendbDisk"
+$NewSku            = "StandardSSD_LRS"
+
+Connect-AzAccount
+
+Stop-AzVM -ResourceGroupName $ResourceGroupName -Name "YourVMName" -Force
+
+$disk = Get-AzDisk -ResourceGroupName $ResourceGroupName -DiskName $DiskName
+$disk.Sku.Name = $NewSku
+Update-AzDisk -ResourceGroupName $ResourceGroupName -DiskName $DiskName -Disk $disk
+
+Start-AzVM -ResourceGroupName $ResourceGroupName -Name "YourVMName"
+
+Write-Host "Disk downgraded to $NewSku"
